@@ -1,0 +1,75 @@
+# codemagic.yaml — place in the ROOT of your GitHub repository.
+# Builds a debug APK for the nodeshield_vpn Flutter Android project.
+workflows:
+  android-debug-apk:
+    name: NodeShield VPN - Android Debug APK
+    instance_type: linux_x2
+    max_build_duration: 30
+
+    environment:
+      flutter: stable
+      java: 17
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: '*'
+          include: true
+          source: true
+
+    scripts:
+      - name: Flutter version
+        script: |
+          flutter --version
+
+      # Generate the missing android/ scaffolding (gradle wrapper, build files,
+      # styles, launcher icons) WITHOUT losing the files you wrote by hand.
+      # Your versions are backed up first and restored after `flutter create`.
+      - name: Initialise Android project (keep my files)
+        script: |
+          set -e
+          BACKUP="$(mktemp -d)"
+          KEEP="pubspec.yaml
+          android/app/src/main/AndroidManifest.xml
+          android/app/src/main/kotlin/com/nodeshield/nodeshield_vpn/MainActivity.kt
+          android/app/proguard-rules.pro"
+
+          for f in $KEEP; do
+            if [ -f "$f" ]; then install -D "$f" "$BACKUP/$f"; fi
+          done
+          if [ -d lib ]; then mkdir -p "$BACKUP/lib" && cp -a lib/. "$BACKUP/lib/"; fi
+
+          flutter create --platforms=android --org com.nodeshield --project-name nodeshield_vpn .
+
+          # Restore the hand-written files over the generated defaults.
+          for f in $KEEP; do
+            if [ -f "$BACKUP/$f" ]; then install -D "$BACKUP/$f" "$f"; fi
+          done
+          if [ -d "$BACKUP/lib" ]; then mkdir -p lib && cp -a "$BACKUP/lib/." lib/; fi
+
+          # The generated sample test references a MyApp class that doesn't exist.
+          rm -f test/widget_test.dart
+
+      # flutter_secure_storage and wireguard need minSdk >= 23.
+      - name: Ensure minSdk >= 23
+        script: |
+          set -e
+          if [ -f android/app/build.gradle.kts ]; then
+            sed -i 's/minSdk = flutter\.minSdkVersion/minSdk = maxOf(23, flutter.minSdkVersion)/' android/app/build.gradle.kts
+            grep -n "minSdk" android/app/build.gradle.kts
+          elif [ -f android/app/build.gradle ]; then
+            sed -i 's/minSdkVersion flutter\.minSdkVersion/minSdkVersion Math.max(23, flutter.minSdkVersion)/' android/app/build.gradle
+            grep -n "minSdkVersion" android/app/build.gradle
+          fi
+
+      - name: Get Flutter packages
+        script: |
+          flutter pub get
+
+      - name: Build debug APK
+        script: |
+          flutter build apk --debug
+
+    artifacts:
+      - build/**/outputs/**/*.apk
